@@ -93,20 +93,24 @@ func (es *EmbeddingService[T]) calculateBatchIndexes(i int, j int, totalItems in
 	start := i + (j * (requestLimit / numWorkers))
 	end := start + (requestLimit / numWorkers)
 	if j == numWorkers-1 {
-		end = min(end, totalItems)
 		end = max(end, i+requestLimit)
+		end = min(end, totalItems)
 	}
 	return start, end
 }
 
+type EmbeddingClient interface {
+	CreateEmbeddings(ctx context.Context, req openai.EmbeddingRequestConverter) (openai.EmbeddingResponse, error)
+}
+
 // OpenAIGenerator is an implementation of the EmbeddingGenerator interface.
 type OpenAIGenerator struct {
-	Client     *openai.Client
+	Client     EmbeddingClient
 	Model      openai.EmbeddingModel
 	Dimensions int
 }
 
-func NewOpenAIGenerator(client *openai.Client, model openai.EmbeddingModel, dimensions int) *OpenAIGenerator {
+func NewOpenAIGenerator(client EmbeddingClient, model openai.EmbeddingModel, dimensions int) *OpenAIGenerator {
 	return &OpenAIGenerator{
 		Client:     client,
 		Model:      model,
