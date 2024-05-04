@@ -1,4 +1,4 @@
-package embedder
+package embedding
 
 import (
 	"context"
@@ -15,7 +15,7 @@ type MockGenerator struct {
 	mock.Mock
 }
 
-func (m *MockGenerator) GenerateEmbedding(ctx context.Context, content any) ([]float32, error) {
+func (m *MockGenerator) GenerateEmbedding(ctx context.Context, content string) ([]float32, error) {
 	args := m.Called(ctx, content)
 	return args.Get(0).([]float32), args.Error(1)
 }
@@ -25,9 +25,9 @@ type MockAdapter[T any] struct {
 	mock.Mock
 }
 
-func (m *MockAdapter[T]) GetContent(item T) any {
+func (m *MockAdapter[T]) GetContent(item T) string {
 	args := m.Called(item)
-	return args.Get(0)
+	return args.Get(0).(string)
 }
 
 func (m *MockAdapter[T]) StoreEmbedding(item T, embedding []float32) {
@@ -139,72 +139,6 @@ func TestSteadyRateLimiter_AdjustConcurrency(t *testing.T) {
 			limiter := NewSteadyRateLimiter(100, 60*time.Second, tt.initialWorkers)
 			newConcurrency := limiter.AdjustConcurrency(tt.elapsedTime)
 			assert.Equal(t, tt.expectedWorkers, newConcurrency)
-		})
-	}
-}
-func TestCalculateBatchIndexes(t *testing.T) {
-	tests := []struct {
-		name          string
-		index         int
-		worker        int
-		totalItems    int
-		numWorkers    int
-		requestLimit  int
-		expectedStart int
-		expectedEnd   int
-	}{
-		{
-			name:          "Even Distribution",
-			index:         0,
-			worker:        0,
-			totalItems:    100,
-			numWorkers:    10,
-			requestLimit:  100,
-			expectedStart: 0,
-			expectedEnd:   10,
-		},
-		{
-			name:          "Last Worker Excess",
-			index:         0,
-			worker:        9,
-			totalItems:    95,
-			numWorkers:    10,
-			requestLimit:  100,
-			expectedStart: 90,
-			expectedEnd:   95,
-		},
-		{
-			name:          "Uneven Distribution",
-			index:         50,
-			worker:        0,
-			totalItems:    120,
-			numWorkers:    4,
-			requestLimit:  40,
-			expectedStart: 50,
-			expectedEnd:   60,
-		},
-		{
-			name:          "Single Worker",
-			index:         0,
-			worker:        0,
-			totalItems:    10,
-			numWorkers:    1,
-			requestLimit:  100,
-			expectedStart: 0,
-			expectedEnd:   10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			limiter := &SteadyRateLimiter{
-				concurrency:  tt.numWorkers,
-				requestLimit: tt.requestLimit,
-			}
-			service := NewEmbeddingService[int](nil, nil, limiter)
-			start, end := service.calculateBatchIndexes(tt.index, tt.worker, tt.totalItems)
-			assert.Equal(t, tt.expectedStart, start)
-			assert.Equal(t, tt.expectedEnd, end)
 		})
 	}
 }

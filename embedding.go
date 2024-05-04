@@ -1,8 +1,7 @@
-package embedder
+package embedding
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -13,7 +12,7 @@ import (
 )
 
 type ContentStore[T any] interface {
-	GetContent(item T) any
+	GetContent(item T) string
 }
 
 type EmbeddingStore[T any] interface {
@@ -28,7 +27,7 @@ type EmbeddingAdapter[T any] interface {
 
 // EmbeddingGenerator defines the interface for generating embeddings.
 type EmbeddingGenerator interface {
-	GenerateEmbedding(context context.Context, content any) ([]float32, error)
+	GenerateEmbedding(context context.Context, content string) ([]float32, error)
 }
 
 // RateLimiter defines the interface for adjusting worker settings based on performance.
@@ -57,21 +56,38 @@ func NewEmbeddingService[T any](generator EmbeddingGenerator, adapter EmbeddingA
 
 // Generate processes all verses and handles worker adjustments.
 func (es *EmbeddingService[T]) GenerateEmbeddings(ctx context.Context, items []T) error {
-	var count int64
+	var total int64
 	wg := &sync.WaitGroup{}
 	for i := 0; i < len(items); i += es.Limiter.RequestLimit() {
+		var count int64
+
+		totalItems := len(items)
 		numWorkers := es.Limiter.Concurrency()
+		batchSize := min(es.Limiter.RequestLimit(), totalItems-i)
+		chunkSize := batchSize / numWorkers
+
 		wg.Add(numWorkers)
+
 		startTime := time.Now()
 		for j := 0; j < numWorkers; j++ {
-			start, end := es.calculateBatchIndexes(i, j, len(items))
+
+			start := i + j*chunkSize
+			end := start + chunkSize
+
+			// Adjust the end for the last worker or if end exceeds total items
+			if end > totalItems {
+				end = totalItems
+			} else if j == numWorkers-1 && end < i+batchSize { // adjust when there was integer truncation on the chunkSize calculation
+				end = min(totalItems, i+batchSize)
+			}
+
 			go func(start, end int) {
 				defer wg.Done()
 				for _, item := range items[start:end] {
 					content := es.Adapter.GetContent(item)
 					embedding, err := es.Generator.GenerateEmbedding(ctx, content)
 					if err != nil {
-						log.Printf("Error generating embeddings: %v", err)
+						log.Printf("Error generating embeddings: %v '%v'", err, item)
 						continue
 					}
 					es.Adapter.StoreEmbedding(item, embedding)
@@ -80,23 +96,12 @@ func (es *EmbeddingService[T]) GenerateEmbeddings(ctx context.Context, items []T
 			}(start, end)
 		}
 		wg.Wait()
+		total += count
 		elapsed := time.Since(startTime)
-		fmt.Printf("Processed %d verses in %s with %d workers.\n", count, elapsed, numWorkers)
+		log.Printf("Processed %d verses in %s with %d workers. Total processed %d\n", count, elapsed, numWorkers, total)
 		es.Limiter.AdjustConcurrency(elapsed)
 	}
 	return nil
-}
-
-func (es *EmbeddingService[T]) calculateBatchIndexes(i int, j int, totalItems int) (int, int) {
-	numWorkers := es.Limiter.Concurrency()
-	requestLimit := es.Limiter.RequestLimit()
-	start := i + (j * (requestLimit / numWorkers))
-	end := start + (requestLimit / numWorkers)
-	if j == numWorkers-1 {
-		end = max(end, i+requestLimit)
-		end = min(end, totalItems)
-	}
-	return start, end
 }
 
 type EmbeddingClient interface {
@@ -118,9 +123,9 @@ func NewOpenAIGenerator(client EmbeddingClient, model openai.EmbeddingModel, dim
 	}
 }
 
-func (sg *OpenAIGenerator) GenerateEmbedding(context context.Context, content any) ([]float32, error) {
+func (sg *OpenAIGenerator) GenerateEmbedding(context context.Context, content string) ([]float32, error) {
 	embeddingRequest := openai.EmbeddingRequest{
-		Input:      content,
+		Input:      []string{content},
 		Model:      sg.Model,
 		Dimensions: sg.Dimensions,
 	}
